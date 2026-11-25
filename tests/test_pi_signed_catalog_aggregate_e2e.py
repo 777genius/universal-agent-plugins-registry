@@ -16,6 +16,10 @@ class SignedSavedAggregateTests(unittest.TestCase):
         sources = [{"distribution": f"777genius/example-{n:02d}",
                     "release_sequence": 1, "distribution_status": "active"}
                    for n in range(36)]
+        marketing = ["777genius/marketing-kit", "777genius/notion",
+                     "777genius/hubspot-crm", "777genius/playwright-bridge"]
+        for item, distribution in zip(sources, marketing):
+            item["distribution"] = distribution
         sources.append({"distribution": "777genius/suspended", "release_sequence": 1,
                         "distribution_status": "suspended"})
         head = "a" * 40
@@ -24,7 +28,9 @@ class SignedSavedAggregateTests(unittest.TestCase):
                 cases = [{"distribution": item["distribution"], "release_sequence": 1,
                           "scope": scope, "status": "passed", "snapshot_sequence": 50,
                           "snapshot_digest": "sha256:" + "b" * 64,
-                          "installed_dependency_count": 1}
+                          "installed_dependency_count": 4 if item["distribution"] == marketing[0] else 1,
+                          "installed_distributions": marketing if item["distribution"] == marketing[0]
+                          else [item["distribution"]]}
                          for item, scope in subject.expected_shard(sources, shard)]
                 report = {"kind": "pi-signed-full-catalog-saved-production-e2e",
                           "source_head": head, "platform": platform, "shard": shard,
@@ -50,6 +56,27 @@ class SignedSavedAggregateTests(unittest.TestCase):
             self.assertEqual(report["scope_executions"], 216)
             self.assertEqual(report["per_os"], {name: 72 for name in subject.PLATFORMS})
             self.assertEqual(report["snapshot_digest"], "sha256:" + "b" * 64)
+
+    def test_marketing_closure_must_match_exact_distributions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            sources, head = self.sample(folder)
+            shard = next(i for i in range(subject.SHARDS)
+                         if any(s["distribution"] == "777genius/marketing-kit"
+                                for s, _ in subject.expected_shard(sources, i)))
+            path, report = self.modify(folder, shard=shard)
+            case = next(c for c in report["cases"] if c["distribution"] == "777genius/marketing-kit")
+            complete = case["installed_distributions"]
+            for invalid in (complete[:1], complete[:2], complete[:3],
+                            complete + ["777genius/unexpected"],
+                            [d if d != "777genius/hubspot-crm" else "777genius/other"
+                             for d in complete]):
+                case["installed_distributions"] = invalid
+                case["installed_dependency_count"] = len(invalid)
+                path.write_text(json.dumps(report), encoding="utf-8")
+                with self.subTest(identities=invalid), self.assertRaisesRegex(
+                        RuntimeError, "Marketing Kit dependency closure"):
+                    subject.aggregate_reports(folder, head, sources, (50, "sha256:" + "b" * 64))
 
     def test_uniform_but_unapproved_publication_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
