@@ -167,6 +167,19 @@ def check_known_dependency_closure(root: str, distributions: set[str]) -> None:
         }, "signed Marketing Kit dependency closure incomplete or changed")
 
 
+def check_dependency_graph(pinned: dict[str, dict], root_alias: str) -> None:
+    """Require every parent chain to terminate at the signed root."""
+    resolved = {root_alias}
+    pending = set(pinned) - resolved
+    while pending:
+        ready = {alias for alias in pending
+                 if pinned[alias].get("required_by") and all(
+                     edge["alias"] in resolved for edge in pinned[alias]["required_by"])}
+        require(bool(ready), "orphaned or cyclic signed dependency graph")
+        resolved.update(ready)
+        pending.difference_update(ready)
+
+
 def observe_readonly_doctor(cli: str, env: dict[str, str], project: Path,
                             portable: Path, scope: str, alias: str, count: int) -> None:
     """Prove the command does not mutate either Pi scope or saved state."""
@@ -271,12 +284,7 @@ def inspect_saved(cli: str, env: dict[str, str], project: Path,
     require(len(feed_ids) == 1, "dependency graph mixes signed feed identities")
     require(expected_snapshot is None or snapshot == expected_snapshot,
             "snapshot changed during signed saved lifecycle")
-    # All dependencies must connect transitively to the signed root.
-    reachable = {root_alias}
-    for _ in pinned:
-        reachable |= {alias for alias, package in pinned.items()
-                      if any(e["alias"] in reachable for e in package.get("required_by", []))}
-    require(reachable == set(pinned), "orphaned or cyclic signed dependency graph")
+    check_dependency_graph(pinned, root_alias)
     check_root_source(expected_info[source["distribution"]][2], source)
     listing = invoke(cli, env, project, "signed-list", "list", "--target", "pi",
                      "--scope", scope, *(("--project-root", str(project)) if scope == "project" else ()))
