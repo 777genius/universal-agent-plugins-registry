@@ -368,11 +368,22 @@ def check_removed_saved(portable: Path) -> None:
               "targets": [{"id": target, "aliases": None} for target in sorted(targets)] or None}
     fingerprint = "sha256:" + hashlib.sha256(
         json.dumps(intent, separators=(",", ":")).encode("utf-8")).hexdigest()
-    lock = json.loads(lock_path.read_text(encoding="utf-8"))
-    require(isinstance(lock, dict) and type(lock.get("lock_version")) is int
+    def unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        folded: set[str] = set()
+        for key, value in pairs:
+            normalized = key.casefold()
+            require(normalized not in folded, "removed saved lock contains duplicate JSON keys")
+            folded.add(normalized)
+            result[key] = value
+        return result
+
+    lock = json.loads(lock_path.read_text(encoding="utf-8"), object_pairs_hook=unique_json_object)
+    require(isinstance(lock, dict) and set(lock) == {"lock_version", "manifest_digest", "packages"}
+            and type(lock.get("lock_version")) is int
             and lock["lock_version"] == 1 and lock.get("packages") == []
             and lock.get("manifest_digest") == fingerprint,
-            "removed saved environment retains lock pins or stale manifest digest")
+            "removed saved environment retains lock pins or malformed lock fields")
 
 
 def run_case(cli: str, scratch: Path, source: dict, scope: str,

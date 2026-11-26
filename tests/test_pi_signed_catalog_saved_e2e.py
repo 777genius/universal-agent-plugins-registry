@@ -94,14 +94,23 @@ class FullSignedCatalogTests(unittest.TestCase):
                 with self.subTest(manifest=body), self.assertRaises(RuntimeError):
                     subject.check_removed_saved(portable)
             manifest.write_text(empty, encoding="utf-8")
-            for bad in (dict(valid, packages=[{"alias": "marketing-kit"}]),
-                        dict(valid, packages=[{"alias": "hubspot-crm"}]),
-                        dict(valid, packages=None), dict(valid, packages={}),
-                        {k: v for k, v in valid.items() if k != "packages"},
-                        dict(valid, manifest_digest="sha256:" + "0" * 64),
-                        dict(valid, lock_version=True)):
-                lock.write_text(json.dumps(bad), encoding="utf-8")
-                with self.subTest(lock=bad), self.assertRaises(RuntimeError):
+            malformed_locks = (
+                (json.dumps(dict(valid, packages=[{"alias": "marketing-kit"}])), "stale package"),
+                (json.dumps(dict(valid, packages=[{"alias": "hubspot-crm"}])), "stale dependency"),
+                (json.dumps(dict(valid, packages=None)), "null packages"),
+                (json.dumps(dict(valid, packages={})), "object packages"),
+                (json.dumps({k: v for k, v in valid.items() if k != "packages"}), "missing packages"),
+                (json.dumps(dict(valid, manifest_digest="sha256:" + "0" * 64)), "stale digest"),
+                (json.dumps(dict(valid, lock_version=True)), "boolean version"),
+                (json.dumps(dict(valid, stale=True)), "unknown field"),
+                ('{"lock_version":1,"manifest_digest":"' + empty_digest
+                 + '","packages":[{"alias":"marketing-kit"}],"packages":[]}', "duplicate packages"),
+                ('{"lock_version":1,"manifest_digest":"' + empty_digest
+                 + '","Manifest_Digest":"' + empty_digest + '","packages":[]}', "case-folded duplicate digest"),
+            )
+            for body, label in malformed_locks:
+                lock.write_text(body, encoding="utf-8")
+                with self.subTest(lock=label), self.assertRaises(RuntimeError):
                     subject.check_removed_saved(portable)
             lock.unlink()
             with self.assertRaises(RuntimeError):
