@@ -68,6 +68,54 @@ class FullSignedCatalogTests(unittest.TestCase):
             with self.subTest(bad=bad[0]), self.assertRaises(RuntimeError):
                 subject.verify_shard(bad, sources, shard, expected)
 
+    def test_removed_saved_requires_empty_manifest_and_matching_lock(self):
+        empty_digest = "sha256:2110fb382f40916fd7f7b674ece50f3969d1ad918fd7e316b863085f3cef0613"
+        empty_target_digest = "sha256:3f5a0dfd3281dcef98dc8af40980f3359e598aa9aa69a5dbae753fe9f69fd2fd"
+        with tempfile.TemporaryDirectory() as d:
+            portable = Path(d)
+            manifest, lock = portable / "uap.toml", portable / "uap.lock"
+            empty = "schema_version = 1\n"
+            valid = {"lock_version": 1, "manifest_digest": empty_digest, "packages": []}
+            for body, expected_digest in ((empty, empty_digest),
+                    (empty + "[dependencies]\n[dev-dependencies]\n[targets]\npi = []\n",
+                     empty_target_digest)):
+                manifest.write_text(body, encoding="utf-8")
+                lock.write_text(json.dumps(dict(valid, manifest_digest=expected_digest)), encoding="utf-8")
+                subject.check_removed_saved(portable)
+            lock.write_text(json.dumps(valid), encoding="utf-8")
+            for body in (
+                empty + '[dependencies]\n"777genius/marketing-kit" = "0.1.0"\n',
+                empty + '[dev-dependencies]\n"777genius/hubspot-crm" = "0.1.0"\n',
+                empty + '[targets]\npi = ["marketing-kit"]\n',
+                empty + '[targets]\npi = []\n',  # stale digest
+                "schema_version = true\n",
+            ):
+                manifest.write_text(body, encoding="utf-8")
+                with self.subTest(manifest=body), self.assertRaises(RuntimeError):
+                    subject.check_removed_saved(portable)
+            manifest.write_text(empty, encoding="utf-8")
+            malformed_locks = (
+                (json.dumps(dict(valid, packages=[{"alias": "marketing-kit"}])), "stale package"),
+                (json.dumps(dict(valid, packages=[{"alias": "hubspot-crm"}])), "stale dependency"),
+                (json.dumps(dict(valid, packages=None)), "null packages"),
+                (json.dumps(dict(valid, packages={})), "object packages"),
+                (json.dumps({k: v for k, v in valid.items() if k != "packages"}), "missing packages"),
+                (json.dumps(dict(valid, manifest_digest="sha256:" + "0" * 64)), "stale digest"),
+                (json.dumps(dict(valid, lock_version=True)), "boolean version"),
+                (json.dumps(dict(valid, stale=True)), "unknown field"),
+                ('{"lock_version":1,"manifest_digest":"' + empty_digest
+                 + '","packages":[{"alias":"marketing-kit"}],"packages":[]}', "duplicate packages"),
+                ('{"lock_version":1,"manifest_digest":"' + empty_digest
+                 + '","Manifest_Digest":"' + empty_digest + '","packages":[]}', "case-folded duplicate digest"),
+            )
+            for body, label in malformed_locks:
+                lock.write_text(body, encoding="utf-8")
+                with self.subTest(lock=label), self.assertRaises(RuntimeError):
+                    subject.check_removed_saved(portable)
+            lock.unlink()
+            with self.assertRaises(RuntimeError):
+                subject.check_removed_saved(portable)
+
     def test_wrong_authenticated_publication_refused_before_add(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

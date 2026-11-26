@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 from pi_catalog_inventory_e2e import ROOT, active_sources, require_exact_checkout
 from pi_signed_project_trust import check_opposite_after_project, check_removed, verify_project_trust
@@ -342,6 +343,49 @@ def inspect_saved(cli: str, env: dict[str, str], project: Path,
     return ("sha256:" + hashlib.sha256(lockbytes).hexdigest(), owners, actual, snapshot)
 
 
+def check_removed_saved(portable: Path) -> None:
+    """Reject stale saved intent/pins in the isolated, formerly installed profile."""
+    manifest_path, lock_path = portable / "uap.toml", portable / "uap.lock"
+    for path in (manifest_path, lock_path):
+        require(path.is_file() and not path.is_symlink()
+                and 0 < path.stat().st_size <= 4 * 1024 * 1024,
+                "removed saved environment file missing or unsafe")
+    manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+    require(type(manifest.get("schema_version")) is int
+            and manifest["schema_version"] == 1
+            and set(manifest) <= {"schema_version", "dependencies", "dev-dependencies", "targets"}
+            and manifest.get("dependencies", {}) == {}
+            and manifest.get("dev-dependencies", {}) == {},
+            "removed saved environment retains dependency intent")
+    targets = manifest.get("targets", {})
+    require(isinstance(targets, dict) and set(targets) <= {"pi"}
+            and all(aliases == [] for aliases in targets.values()),
+            "removed saved environment retains target intent")
+    # The frozen CLI's ManifestDigest marshals nil dependency/target slices as
+    # JSON null; an explicitly empty target has nil aliases. Bind the empty
+    # lock to the actual remaining manifest rather than accepting a stale hash.
+    intent = {"schema_version": 1, "dependencies": None,
+              "targets": [{"id": target, "aliases": None} for target in sorted(targets)] or None}
+    fingerprint = "sha256:" + hashlib.sha256(
+        json.dumps(intent, separators=(",", ":")).encode("utf-8")).hexdigest()
+    def unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        folded: set[str] = set()
+        for key, value in pairs:
+            normalized = key.casefold()
+            require(normalized not in folded, "removed saved lock contains duplicate JSON keys")
+            folded.add(normalized)
+            result[key] = value
+        return result
+
+    lock = json.loads(lock_path.read_text(encoding="utf-8"), object_pairs_hook=unique_json_object)
+    require(isinstance(lock, dict) and set(lock) == {"lock_version", "manifest_digest", "packages"}
+            and type(lock.get("lock_version")) is int
+            and lock["lock_version"] == 1 and lock.get("packages") == []
+            and lock.get("manifest_digest") == fingerprint,
+            "removed saved environment retains lock pins or malformed lock fields")
+
+
 def run_case(cli: str, scratch: Path, source: dict, scope: str,
              expected_snapshot: tuple[int, str]) -> dict:
     label = source["distribution"]
@@ -390,6 +434,7 @@ def run_case(cli: str, scratch: Path, source: dict, scope: str,
         data = response.get("data")
         require(isinstance(data, dict) and data.get("installations") == [],
                 "signed dependency owners remain after removal")
+        check_removed_saved(portable)
         active = native_root(env, project, scope)
         opposite = native_root(env, project, "project" if scope == "user" else "user")
         check_removed(active, before, native_fingerprint(active), had_mcp="mcp.json" in installed)
